@@ -18,10 +18,12 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 
 public class Server {
 	private Map<SocketChannel, String> clients;
+	private Map<String, List<String>> clientsTopics;
 	private Map<String, Map<Integer, String>> _articles;
 	private List<String> _topics;
 
@@ -34,6 +36,7 @@ public class Server {
 	Server() throws IOException {
 		clients = new HashMap<SocketChannel, String>();
 		_articles = new HashMap<String, Map<Integer, String>>();
+		clientsTopics = new HashMap<String, List<String>>();
 		String host = "localhost";
 		int port = 10666;
 
@@ -46,9 +49,10 @@ public class Server {
 
 		LoadTopics();
 		LoadArticles();
+		LoadClientsTopics();
 
 		PrintAllArticles();
-		
+
 		System.out.println("Serwer: czekam ... ");
 
 		while (true) {
@@ -98,13 +102,33 @@ public class Server {
 			Map.Entry entry = (Map.Entry) iterator.next();
 			Set setArticles = ((Map<Integer, String>) entry.getValue()).entrySet();
 			Iterator iteratorArticles = setArticles.iterator();
-			
+
 			System.out.println("Topic: " + entry.getKey());
 			while (iteratorArticles.hasNext()) {
 				Map.Entry entryArticle = (Map.Entry) iteratorArticles.next();
 				System.out.println("key : " + entryArticle.getKey() + " & Value : ");
 				System.out.println("\t" + entryArticle.getValue());
 			}
+		}
+	}
+	
+	@SuppressWarnings("unchecked")
+	private void LoadClientsTopics() {
+		clientsTopics = new HashMap<String, List<String>>();
+
+		try {
+			FileInputStream fileInput = new FileInputStream("ClientsTopics.dat");
+			ObjectInputStream objectInput = new ObjectInputStream(fileInput);
+
+			clientsTopics = (HashMap<String, List<String>>) objectInput.readObject();
+
+			objectInput.close();
+			fileInput.close();
+		} catch (IOException ex) {
+			System.out.println(ex.getMessage());
+		} catch (ClassNotFoundException ex) {
+			System.out.println("Class not found");
+			System.out.println(ex.getMessage());
 		}
 	}
 
@@ -175,6 +199,20 @@ public class Server {
 			System.out.println(e.getMessage());
 		}
 	}
+	
+	private void SaveClientsTopics() {
+		try {
+			FileOutputStream myFileOutStream = new FileOutputStream("ClientsTopics.dat");
+
+			ObjectOutputStream myObjectOutStream = new ObjectOutputStream(myFileOutStream);
+
+			myObjectOutStream.writeObject(clientsTopics);
+			myObjectOutStream.close();
+			myFileOutStream.close();
+		} catch (IOException e) {
+			System.out.println(e.getMessage());
+		}
+	}
 
 	private static Charset charset = Charset.forName("ISO-8859-2");
 	private static final int BSIZE = 1024;
@@ -216,6 +254,17 @@ public class Server {
 
 				clients.put(socketChannel, "Admin" + counter++);
 				socketChannel.write(charset.encode(CharBuffer.wrap("OK")));
+			} else if (cmd.contains(new StringBuffer("LoginClient"))) {
+				String clientName = cmd.split(":")[1];
+				if (clients.containsValue(clientName))
+					socketChannel
+							.write(charset.encode(CharBuffer.wrap("Client already log in, please restart Your app.")));
+				else {
+					clients.put(socketChannel, clientName);
+
+					System.out.println("Client log in: " + cmd.split(":")[1]);
+					socketChannel.write(charset.encode(CharBuffer.wrap("OK")));
+				}
 			} else if (cmd.equals("GetListOfTopics")) {
 				String message = "";
 				for (String item : _topics)
@@ -254,17 +303,17 @@ public class Server {
 				}
 			} else if (cmd.contains(new StringBuffer("RemoveTopic"))) {
 				String topic = cmd.split(":")[1];
-				
+
 				if (_topics.contains(topic)) {
 					_topics.remove(topic);
 
 					System.out.println("Topic removed: " + topic);
 
 					_articles.remove(topic);
-					
+
 					SaveTopics();
 					SaveArticles();
-					
+
 					socketChannel.write(charset.encode(CharBuffer.wrap("OK")));
 				} else {
 					socketChannel.write(charset.encode(CharBuffer.wrap("Topic don't exists.")));
@@ -304,7 +353,87 @@ public class Server {
 				} else {
 					socketChannel.write(charset.encode(CharBuffer.wrap("Topic or article was empty.")));
 				}
+			} else if (cmd.contains(new StringBuffer("AddSubscriptionTopic"))) {
+				String clientName = cmd.split(":")[1];
+				String topicName = cmd.split(":")[2];
+
+				if (clientsTopics.containsKey(clientName)) {
+					List<String> topics = clientsTopics.get(clientName);
+					if (topics.contains(topicName))
+						socketChannel.write(charset.encode(CharBuffer.wrap("Topic already exists.")));
+					else {
+						topics.add(topicName);
+						socketChannel.write(charset.encode(CharBuffer.wrap("OK")));
+					}
+				} else {
+					List<String> topics = new ArrayList<String>();
+					topics.add(topicName);
+					
+					clientsTopics.put(clientName, topics);
+					
+					socketChannel.write(charset.encode(CharBuffer.wrap("OK")));
+				}
+				
+				SaveClientsTopics();
+			} else if (cmd.contains(new StringBuffer("RemoveSubscriptionTopic"))) {
+				String clientName = cmd.split(":")[1];
+				String topicName = cmd.split(":")[2];
+
+				System.out.println("RemoveSubscriptionTopic Start");
+				
+				if (clientsTopics.containsKey(clientName)) {
+					List<String> topics = clientsTopics.get(clientName);
+					if (topics.contains(topicName)) {
+						topics.remove(topicName);
+						socketChannel.write(charset.encode(CharBuffer.wrap("OK")));
+					}
+					else {
+						socketChannel.write(charset.encode(CharBuffer.wrap("Topic don't exists.")));
+					}
+				} else {
+					socketChannel.write(charset.encode(CharBuffer.wrap("Client don't exists.")));
+				}
+				
+				SaveClientsTopics();
+			} else if (cmd.contains(new StringBuffer("GetClientListOfTopics"))) {
+				String message = "";
+				String clientName = cmd.split(":")[1];
+				
+				System.out.println("GetClientListOfTopics Start");
+				
+				for (String item : clientsTopics.get(clientName))
+					message += item + ":";
+				message.substring(0, message.length() - 1);
+
+				System.out.println(message);
+
+				socketChannel.write(charset.encode(CharBuffer.wrap(message)));
+			} else if (cmd.contains(new StringBuffer("LoadArticlesForTopic"))) {
+				String message = "";
+				String topicsName = cmd.split(":")[1];
+				
+				System.out.println("LoadArticlesForTopic Start");
+				
+				if (_articles.containsKey(topicsName)) {
+					Map<Integer, String> articles = _articles.get(topicsName);
+					Set<Entry<Integer, String>> set = articles.entrySet();
+					Iterator<Entry<Integer, String>> iterator = set.iterator();
+
+					while (iterator.hasNext()) {
+						Entry<Integer, String> entry = iterator.next();
+
+						message += entry.getValue() + ":";
+					}
+					
+					message.substring(0, message.length() - 1);
+					
+					System.out.println(message);
+					
+					socketChannel.write(charset.encode(CharBuffer.wrap(message)));
+				} else
+					socketChannel.write(charset.encode(CharBuffer.wrap(":")));
 			}
+			
 		} catch (Exception exc) { // przerwane polączenie?
 			exc.printStackTrace();
 			try {
